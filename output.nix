@@ -90,7 +90,7 @@ let
     else
       let
         pkgDeps = builtins.filter (d: !(info.pseudoPackages ? "${d}"))
-          (builtins.attrNames (deps.packageDeps allDeps "pkgs" pkg));
+          (builtins.attrNames (deps.packageDeps allDeps.units "pkgs" pkg));
         buildInputs = pkgs.lib.attrVals pkgDeps self.pkgs;
       in pkgs.stdenv.mkDerivation ({
         pname = pkg;
@@ -119,8 +119,8 @@ let
 
           runHook postInstall
         '';
-      } // genPatchPhase info self (deps.packageDeps allDeps "files" pkg)
-        (deps.packageDepsMulti allDeps "exes" pkg) buildInputs);
+      } // genPatchPhase info self (deps.packageDeps allDeps.units "files" pkg)
+        (deps.packageDepsMulti allDeps.units "exes" pkg) buildInputs);
 
   genTestedPackage = info: self: pkg: _:
     let
@@ -260,7 +260,7 @@ let
   genPackageSrc = root: allDeps: info: pkg: pkgDef:
     let
       pseudoPkgDeps = builtins.filter (d: info.pseudoPackages ? "${d}")
-        (builtins.attrNames (deps.packageDeps allDeps "pkgs" pkg));
+        (builtins.attrNames (deps.packageDeps allDeps.units "pkgs" pkg));
       sepLibs = builtins.mapAttrs (_: { lib, ... }: builtins.attrNames lib)
         (pkgs.lib.getAttrs pseudoPkgDeps info.packages);
       filters = builtins.concatLists (builtins.concatLists
@@ -397,7 +397,9 @@ let
           (builtins.toJSON (deps.separatedLibs allDeps));
         deps = pkgs.writeText "all-deps.json" (show.allDepsToJSON allDeps);
         deps-graph =
-          pkgs.writeText "packages.dot" (show.packagesDotGraph allDeps);
+          pkgs.writeText "packages.dot" (show.packagesDotGraph allDeps.units);
+        deps-graphs = builtins.mapAttrs (_: pkgs.writeText "packages.dot")
+          (show.perPackageDotGraphs allDeps.units);
       };
     };
 in { inherit outputs outputs' overrideDerivations; }

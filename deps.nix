@@ -83,11 +83,10 @@ let
           else
             acc2) acc1 units1) acc0 units0) { } allDeps.units;
 
-  packageDepsImpl = update: allDeps: field: pkg:
+  packageDepsImpl = update: allUnitDeps: field: pkg:
     builtins.foldl' (acc0: v0:
       builtins.foldl' (acc: v: update acc v."${field}") acc0
-      (builtins.attrValues v0)) { }
-    (builtins.attrValues allDeps.units."${pkg}");
+      (builtins.attrValues v0)) { } (builtins.attrValues allUnitDeps."${pkg}");
 
   packageDeps = packageDepsImpl (a: b: a // b);
   packageDepsMulti = packageDepsImpl pkgs.lib.recursiveUpdate;

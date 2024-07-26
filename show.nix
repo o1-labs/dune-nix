@@ -29,24 +29,38 @@ let
             pruneDepMap))) units;
     };
 
-  packagesDotGraph = allDeps:
+  packagesDotGraph = allUnitDeps:
     let
       sep = "\n  ";
       nonTransitiveDeps = pkg:
         let
-          pkgDeps = deps.packageDeps allDeps "pkgs" pkg;
-          transitiveDeps = builtins.foldl'
-            (acc: depPkg: acc // deps.packageDeps allDeps "pkgs" depPkg) { }
-            (builtins.attrNames pkgDeps);
+          pkgDeps = deps.packageDeps allUnitDeps "pkgs" pkg;
+          transitiveDeps = builtins.foldl' (acc: depPkg:
+            if allUnitDeps ? "${depPkg}" then
+              acc // deps.packageDeps allUnitDeps "pkgs" depPkg
+            else
+              acc) { } (builtins.attrNames pkgDeps);
         in builtins.attrNames
         (builtins.removeAttrs pkgDeps (builtins.attrNames transitiveDeps));
       escape = builtins.replaceStrings [ "-" ] [ "_" ];
       genEdges = pkg:
         pkgs.lib.concatMapStringsSep sep (dep: "${escape pkg} -> ${escape dep}")
         (nonTransitiveDeps pkg);
-    in "digraph packages {\n  " + pkgs.lib.concatMapStringsSep sep genEdges
-    (builtins.attrNames allDeps.units) + ''
+    in "digraph packages {\n  "
+    + pkgs.lib.concatMapStringsSep sep genEdges (builtins.attrNames allUnitDeps)
+    + ''
 
       }'';
 
-in { inherit allDepsToJSON packagesDotGraph; }
+  perPackageDotGraph = allUnitDeps: pkg:
+    let
+      pkgDeps = deps.packageDeps allUnitDeps "pkgs" pkg;
+      pkgNames = builtins.attrNames pkgDeps;
+    in packagesDotGraph (pkgs.lib.getAttrs pkgNames allUnitDeps);
+
+  perPackageDotGraphs = allUnitDeps:
+    builtins.mapAttrs (k: _: perPackageDotGraph allUnitDeps k) allUnitDeps;
+
+in {
+  inherit allDepsToJSON packagesDotGraph perPackageDotGraph perPackageDotGraphs;
+}

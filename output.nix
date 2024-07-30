@@ -147,33 +147,24 @@ let
         dontCheck = false;
       });
 
-  genExe = allDeps: info: self: pkg: name: exeDef:
-    let
-      deps = field: allDeps.units."${pkg}".exe."${name}"."${field}" or { };
-      pkgDeps = builtins.filter (d: !(info.pseudoPackages ? "${d}"))
-        (builtins.attrNames (deps "pkgs"));
-      buildInputs = pkgs.lib.attrVals pkgDeps self.pkgs;
+  genExe = self: pkg: name: exeDef:
+    let pkgEnvVar = util.artifactEnvVar [ "pkgs" pkg ];
     in pkgs.stdenv.mkDerivation ({
+      buildInputs = [ self.pkgs."${pkg}" ];
       pname = "${name}.exe";
       version = "dev";
-      src = self.src.all-exes."${pkg}"."${name}";
-      buildPhase = ''
-        runHook preBuild
-
-        dune build -j $NIX_BUILD_CORES --root=. --build-dir=_build "${exeDef.src}/${exeDef.name}.exe"
-
-        runHook postBuild
-      '';
+      phases = [ "installPhase" ];
       installPhase = ''
         runHook preInstall
 
         mkdir -p $out/bin
-        mv "_build/default/${exeDef.src}/${exeDef.name}.exe" $out/bin/${name}
+        envVar="${pkgEnvVar}"
+        cp "''${!envVar}/default/${exeDef.src}/${exeDef.name}.exe" $out/bin/${name}
         ${installNixSupportExe pkg name}
 
         runHook postInstall
       '';
-    } // genPatchPhase info self (deps "files") (deps "exes") buildInputs);
+    });
 
   genFile = allDeps: info: self: pname: src:
     let deps = field: allDeps.files."${src}"."${field}";
@@ -271,18 +262,7 @@ let
       path = root;
       name = "source-${pkg}";
     } (pathFilter.merge filters);
-  genExeSrc = root: allDeps: info: pkg: name: exeDef:
-    let
-      deps = field: allDeps.units."${pkg}".exe."${name}"."${field}" or { };
-      pseudoPkgDeps = builtins.filter (d: info.pseudoPackages ? "${d}")
-        (builtins.attrNames (deps "pkgs"));
-      sepLibs = builtins.mapAttrs (_: builtins.attrNames) ((deps "libs")
-        // builtins.mapAttrs (_: { lib, ... }: lib)
-        (pkgs.lib.getAttrs pseudoPkgDeps info.packages));
-    in pathFilter.toPath {
-      path = root;
-      name = "source-${name}-exe";
-    } (pathFilter.merge (unitSourceFiltersWithExtra info sepLibs exeDef));
+  genExeSrc = pkg: name: exeDef: throw "no source defined for executables";
   genFileSrc = root: info: name: src:
     pathFilter.toPath {
       path = root;
@@ -361,14 +341,12 @@ let
           { } info.packages."${pkg}");
     in mkOutputs info allDeps.files
     (genPackage separatedPackages allDeps info self)
-    (genTestedPackage info self) (genExe allDeps info self)
-    (genFile allDeps info self) // {
+    (genTestedPackage info self) (genExe self) (genFile allDeps info self) // {
       src = mkOutputs info allDeps.files (genPackageSrc rootPath allDeps info)
-        (genPackageSrc rootPath allDeps info) (genExeSrc rootPath allDeps info)
+        (genPackageSrc rootPath allDeps info) genExeSrc
         (genFileSrc rootPath info);
       exes = builtins.foldl' (acc:
         { package, name }:
-        # TODO for exes within packages, use package derivation
         acc // {
           "${name}" = if acc ? "${name}" then
             throw "Executable with name ${name} defined more than once"

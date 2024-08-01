@@ -327,10 +327,10 @@ let
     ] else
       [ self.pkgs."${pkg}" ];
   testOrPkg = testOrPkgImpl false;
-  testOrPkg' = testByDefault: info: self: pkg:
-    testOrPkgImpl (testByDefault info.packages."${pkg}") info self pkg;
+  testOrPkg' = skipTestByDefault: info: self: pkg:
+    testOrPkgImpl (skipTestByDefault info.packages."${pkg}") info self pkg;
 
-  outputs = rootPath: allDeps: info: testByDefault: self:
+  outputs = rootPath: allDeps: info: skipTestByDefault: self:
     let
       packageNames = builtins.attrNames info.packages;
       separatedLibs = deps.separatedLibs allDeps;
@@ -358,14 +358,14 @@ let
       all =
         mkCombined "all" (builtins.map (pkg: self.pkgs."${pkg}") packageNames);
       default = mkCombined "default"
-        (builtins.concatMap (testOrPkg' testByDefault info self) packageNames);
+        (builtins.concatMap (testOrPkg' skipTestByDefault info self) packageNames);
       all-tested = mkCombined "all-tested"
         (builtins.concatMap (testOrPkg info self) packageNames);
     };
 
-  outputs' = commonOverrides: rootPath: allDeps: info: testByDefault: self:
+  outputs' = commonOverrides: rootPath: allDeps: info: skipTestByDefault: self:
     overrideDerivations commonOverrides
-    (outputs rootPath allDeps info testByDefault self) // {
+    (outputs rootPath allDeps info skipTestByDefault self) // {
       info = {
         src = pkgs.writeText "src-info.json" (builtins.toJSON info.srcInfo);
         exe = pkgs.writeText "exes.json" (builtins.toJSON info.exes);

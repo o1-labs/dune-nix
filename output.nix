@@ -358,7 +358,8 @@ let
       all =
         mkCombined "all" (builtins.map (pkg: self.pkgs."${pkg}") packageNames);
       default = mkCombined "default"
-        (builtins.concatMap (testOrPkg' skipTestByDefault info self) packageNames);
+        (builtins.concatMap (testOrPkg' skipTestByDefault info self)
+          packageNames);
       all-tested = mkCombined "all-tested"
         (builtins.concatMap (testOrPkg info self) packageNames);
     };

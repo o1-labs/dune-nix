@@ -82,35 +82,8 @@ let
     else
       units."${key.package}"."${key.type}"."${key.name}";
 
-  computeDepsImpl = info: acc0: path: directDeps:
+  trivialPromoted = info: libs:
     let
-      recLoopMsg = "Recursive loop in ${builtins.concatStringsSep "." path}";
-      acc1 = util.setAttrByPath (throw recLoopMsg) acc0 path;
-      directKeys = allDepKeys directDeps;
-      acc2 = builtins.foldl' (computeDeps info) acc1 directKeys;
-      exes = builtins.foldl' (acc': key:
-        let subdeps = depByKey acc2 key;
-        in pkgs.lib.recursiveUpdate (subdeps.exes or { }) acc') directDeps.exes
-        directKeys;
-      files = builtins.foldl' (acc': key:
-        let subdeps = depByKey acc2 key;
-        in pkgs.lib.recursiveUpdate (subdeps.files or { }) acc')
-        directDeps.files directKeys;
-      libsAndPkgs = builtins.foldl' (acc': key:
-        if key.type == "lib" then
-          let
-            subdeps = depByKey acc2 key;
-            update = {
-              libs = subdeps.libs or { };
-              pkgs = subdeps.pkgs or { };
-            };
-          in pkgs.lib.recursiveUpdate update acc'
-        else
-          acc') {
-            libs = directDeps.libs or { };
-            pkgs = directDeps.pkgs or { };
-          } directKeys;
-      depMap = libsAndPkgs // { inherit exes files; };
       promote_ = pkg: libs:
         let
           pkgDef = info.packages."${pkg}";
@@ -118,25 +91,41 @@ let
           rem = builtins.removeAttrs pkgDef.lib libs_;
           trivialCase = rem == { } && pkgDef.test == { } && pkgDef.exe == { };
         in if trivialCase then [ pkg ] else [ ];
-      promoted =
-        builtins.concatLists (pkgs.lib.mapAttrsToList promote_ depMap.libs);
-      depMap' = executePromote depMap promoted;
+    in builtins.concatLists (pkgs.lib.mapAttrsToList promote_ libs);
+
+  computeDepsImpl = info: acc0: path: directDeps:
+    let
+      recLoopMsg = "Recursive loop in ${builtins.concatStringsSep "." path}";
+      acc1 = util.setAttrByPath (throw recLoopMsg) acc0 path;
+      directKeys = allDepKeys directDeps;
+      acc2 = builtins.foldl' (computeDeps info) acc1 directKeys;
+      # Inheritance logic:
+      #  - inherit executables and files from all of dependencies
+      #  - inherit libs, packages from all lib dependencies
+      # (lib, pkg dependencies are not to be inherited from file, exe dependencies)
+      depMap = builtins.foldl' (acc': key:
+        let
+          subdeps = depByKey acc2 key;
+          update = if key.type == "lib" then
+            subdeps
+          else
+            subdeps // {
+              libs = { };
+              pkgs = { };
+            };
+        in pkgs.lib.recursiveUpdate update acc') directDeps directKeys;
+      depMap' = executePromote depMap (trivialPromoted info depMap.libs);
     in util.setAttrByPath depMap' acc2 path;
+
+  toPubName = info: d:
+    let d' = info.pubNames."${d}" or "";
+    in if d' == "" then d else d';
 
   directLibDeps = info:
     let
-      toPubName = d:
-        let d' = info.pubNames."${d}" or "";
-        in if d' == "" then d else d';
       implementsDep = unit:
-        if unit ? "implements" then [ unit.implements ] else [ ];
-      defImplDeps = unit:
-        if unit ? "default_implementation" then
-          let
-            defImplLib = toPubName unit.default_implementation;
-            defImplPkg = info.lib2Pkg."${defImplLib}";
-          in builtins.map toPubName
-          info.packages."${defImplPkg}".lib."${defImplLib}".deps
+        if unit ? "implements" then
+          [ (toPubName info unit.implements) ]
         else
           [ ];
       mkDep = name: {
@@ -144,17 +133,16 @@ let
         type = "lib";
         package = info.lib2Pkg."${name}";
       };
-      libs = deps:
-        builtins.foldl' (acc: name:
-          if info.lib2Pkg ? "${name}" then
-            pkgs.lib.recursiveUpdate acc {
-              "${info.lib2Pkg."${name}"}"."${name}" = { };
-            }
-          else
-            acc) { } deps;
+      libs = builtins.foldl' (acc: name:
+        if info.lib2Pkg ? "${name}" then
+          pkgs.lib.recursiveUpdate acc {
+            "${info.lib2Pkg."${name}"}"."${name}" = { };
+          }
+        else
+          acc);
     in unit: {
-      libs = libs (defImplDeps unit ++ implementsDep unit
-        ++ builtins.map toPubName unit.deps);
+      libs = libs { }
+        (implementsDep unit ++ builtins.map (toPubName info) unit.deps);
     };
 
   computeDeps = info:
@@ -165,7 +153,10 @@ let
         acc
       else
         computeDepsImpl info acc [ "files" self.src ]
-        (directFileDeps info { } self.src)
+        (directFileDeps info { } self.src // {
+          pkgs = { };
+          libs = { };
+        })
     else if units ? "${self.package}"."${self.type}"."${self.name}" then
       acc
     else
@@ -173,7 +164,9 @@ let
         unit = info.packages."${self.package}"."${self.type}"."${self.name}";
         dfArgs = if self.type == "exe" then { forExe = unit.name; } else { };
         directDeps = directFileDeps info dfArgs unit.src
-          // directLibDeps info unit;
+          // directLibDeps info unit // {
+            pkgs = { };
+          };
       in computeDepsImpl info acc [ "units" self.package self.type self.name ]
       directDeps;
 
@@ -183,9 +176,76 @@ let
         builtins.map (name: { inherit type name package; })
         (builtins.attrNames units)) units0)) allUnits);
 
+  hasImplementation = deps:
+    util.attrFold (res0: pkg: libs:
+      builtins.foldl' (res: name:
+        res || (deps.pkgs ? "${pkg}") || (deps.libs ? "${pkg}"."${name}")) res0
+      (builtins.attrNames libs)) false;
+
+  defaultImplementations = implementations: info: selfImplements: deps:
+    util.attrFold (acc: pkg: pkgLibs:
+      let
+        defs = builtins.foldl' (acc: name:
+          let unit = info.packages."${pkg}".lib."${name}";
+          in if unit ? "default_implementation" then
+            let
+              defImplLib = toPubName info unit.default_implementation;
+              # Check that default implementations do not contain package itself,
+              # and there are indeed no implementations for the virtual library
+            in if selfImplements != name
+            && !(hasImplementation deps (implementations."${name}" or { })) then
+              [ defImplLib ] ++ acc
+            else
+              acc
+          else
+            acc) [ ] (builtins.attrNames pkgLibs);
+      in if defs == [ ] then acc else acc // { "${pkg}" = defs; }) { }
+    deps.libs;
+
+  insertDefImplWithDeps = preliminaryUnits: defImplPkg: deps0: defImplName:
+    let deps1 = util.setAttrByPath { } deps0 [ "libs" defImplPkg defImplName ];
+    in pkgs.lib.recursiveUpdate deps1
+    preliminaryUnits."${defImplPkg}".lib."${defImplName}";
+
   allDepsNotFullyPromoted = info:
-    builtins.foldl' (computeDeps info) {
-      files = { };
-      units = { };
-    } (allUnitKeys info.packages);
+    let
+      empty = {
+        files = { };
+        units = { };
+      };
+      preliminary =
+        builtins.foldl' (computeDeps info) empty (allUnitKeys info.packages);
+      implementations = util.attrFold (acc0: pkg:
+        { lib, ... }:
+        util.attrFold (acc: name: def:
+          if def ? "implements" then
+            let pname = toPubName info def.implements;
+            in pkgs.lib.recursiveUpdate acc {
+              "${pname}"."${pkg}"."${name}" = { };
+            }
+          else
+            acc) acc0 lib) { } info.packages;
+      units = builtins.mapAttrs (pkg:
+        builtins.mapAttrs (type:
+          builtins.mapAttrs (name: deps:
+            let
+              selfImplements =
+                (info.packages."${pkg}"."${type}"."${name}".implements or "");
+              selfImplements' = if selfImplements == "" then
+                ""
+              else
+                toPubName info selfImplements;
+              defImpls =
+                defaultImplementations implementations info selfImplements'
+                deps;
+              deps' = util.attrFold (acc: defImplPkg:
+                builtins.foldl'
+                (insertDefImplWithDeps preliminary.units defImplPkg) acc) deps
+                defImpls;
+            in executePromote deps' (trivialPromoted info deps'.libs))))
+        preliminary.units;
+    in {
+      inherit (preliminary) files;
+      inherit units;
+    };
 in { inherit allDepsNotFullyPromoted executePromote; }

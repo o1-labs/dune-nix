@@ -29,23 +29,32 @@ let
             pruneDepMap))) units;
     };
 
+  nonTransitiveDeps = allUnitDeps: getDeps: pkg:
+    let
+      deps0 = getDeps pkg;
+      transitiveDeps = builtins.foldl' (acc: depPkg:
+        if allUnitDeps ? "${depPkg}" then acc // getDeps depPkg else acc) { }
+        (builtins.attrNames deps0);
+      deps1 = builtins.removeAttrs deps0 (builtins.attrNames transitiveDeps);
+    in builtins.intersectAttrs allUnitDeps deps1;
+
   packagesDotGraph = allUnitDeps:
     let
       sep = "\n  ";
-      nonTransitiveDeps = pkg:
+      nonTransitiveDeps' = pkg:
         let
-          pkgDeps = deps.packageDeps allUnitDeps "pkgs" pkg;
-          transitiveDeps = builtins.foldl' (acc: depPkg:
-            if allUnitDeps ? "${depPkg}" then
-              acc // deps.packageDeps allUnitDeps "pkgs" depPkg
-            else
-              acc) { } (builtins.attrNames pkgDeps);
-        in builtins.attrNames
-        (builtins.removeAttrs pkgDeps (builtins.attrNames transitiveDeps));
+          pkgsAndLibs = pkg:
+            deps.packageDeps allUnitDeps "pkgs" pkg
+            // builtins.removeAttrs (deps.packageDeps allUnitDeps "libs" pkg)
+            [ pkg ];
+          exes = deps.packageDeps allUnitDeps "exes";
+          pkgDeps = nonTransitiveDeps allUnitDeps pkgsAndLibs pkg;
+          exeDeps = nonTransitiveDeps allUnitDeps exes pkg;
+        in builtins.attrNames (pkgDeps // exeDeps);
       escape = builtins.replaceStrings [ "-" ] [ "_" ];
       genEdges = pkg:
         pkgs.lib.concatMapStringsSep sep (dep: "${escape pkg} -> ${escape dep}")
-        (nonTransitiveDeps pkg);
+        (nonTransitiveDeps' pkg);
     in "digraph packages {\n  "
     + pkgs.lib.concatMapStringsSep sep genEdges (builtins.attrNames allUnitDeps)
     + ''
@@ -54,9 +63,18 @@ let
 
   perPackageDotGraph = allUnitDeps: pkg:
     let
+      exeDeps = deps.packageDeps allUnitDeps "exes" pkg;
       pkgDeps = deps.packageDeps allUnitDeps "pkgs" pkg;
-      pkgNames = builtins.attrNames pkgDeps;
-    in packagesDotGraph (pkgs.lib.getAttrs pkgNames allUnitDeps);
+      libDeps = deps.packageDeps allUnitDeps "libs" pkg;
+      exeTransDeps = builtins.foldl' (acc: exePkg:
+        if exePkg == pkg then
+          acc
+        else
+          deps.packageDeps allUnitDeps "pkgs" exePkg
+          // deps.packageDeps allUnitDeps "libs" exePkg // acc) { }
+        (builtins.attrNames exeDeps);
+      allDeps = pkgDeps // libDeps // exeDeps // exeTransDeps;
+    in packagesDotGraph (builtins.intersectAttrs allDeps allUnitDeps);
 
   perPackageDotGraphs = allUnitDeps:
     builtins.mapAttrs (k: _: perPackageDotGraph allUnitDeps k) allUnitDeps;

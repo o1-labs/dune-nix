@@ -379,6 +379,10 @@ let
           pkgs.writeText "packages.dot" (show.packagesDotGraph allDeps.units);
         deps-graphs = builtins.mapAttrs (_: pkgs.writeText "packages.dot")
           (show.perPackageDotGraphs allDeps.units);
+        raw = {
+          deps = allDeps;
+          inherit info;
+        };
       };
     };
 in { inherit outputs outputs' overrideDerivations; }

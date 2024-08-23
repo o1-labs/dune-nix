@@ -1,7 +1,7 @@
 { pkgs, util, pathFilter, deps, show, ... }@args:
 let
   # Patch phase is used to propagate file/exe dependencies
-  genPatchPhase = info: self: fileDeps: exeDeps: buildInputs:
+  genPatchPhase = info: self: fileDeps: exeDeps: buildInputs: forbiddenUnits:
     let
       traverseExes = f:
         builtins.concatLists (pkgs.lib.mapAttrsToList (pkg: nameMap:
@@ -11,7 +11,6 @@ let
         { src, name, ... }:
         let exeEnvVar = util.artifactEnvVar [ "all-exes" pkg key ];
         in "'${exeEnvVar}' '${key}' '${src}/${name}.exe'");
-      # TODO if exe is public, try to promote to package dependency and use as such
       installExes = if exes == [ ] then
         ""
       else ''
@@ -27,12 +26,27 @@ let
       exeInputs = traverseExes (pkg: key: _: self.all-exes."${pkg}"."${key}");
       fileInputs = builtins.map (dep: self.files."${util.quote dep}")
         (builtins.attrNames fileDeps);
+      insertForbiddenLibStub = unit:
+        let
+          pubname = if unit ? "public_name" then
+            "(public_name ${unit.public_name})"
+          else
+            "";
+          package =
+            if unit ? "package" then "(package ${unit.package})" else "";
+        in ''
+          mkdir -p "${unit.src}" && echo "(library (name ${unit.name}) ${pubname} ${package})" >> "${unit.src}"/dune'';
+
+      insertForbiddenLibStubs = if forbiddenUnits == [ ] then
+        ""
+      else
+        pkgs.lib.concatMapStringsSep "\n" insertForbiddenLibStub forbiddenUnits;
     in {
       fileDeps = builtins.map (dep: util.artifactEnvVar [ "files" dep ])
         (builtins.attrNames fileDeps);
       patchPhase = ''
         runHook prePatch
-
+        ${insertForbiddenLibStubs}
         for fileDepEnvName in $fileDeps; do
           cp --no-preserve=mode,ownership -RLTu "''${!fileDepEnvName}" ./
         done
@@ -89,9 +103,34 @@ let
       }"
     else
       let
-        pkgDeps = builtins.filter (d: !(info.pseudoPackages ? "${d}"))
-          (builtins.attrNames (deps.packageDeps allDeps.units "pkgs" pkg));
-        buildInputs = pkgs.lib.attrVals pkgDeps self.pkgs;
+        pkgDeps = deps.packageDeps allDeps.units "pkgs" pkg;
+        # When a virtual package is used and ${pkg} doesn't use the default
+        # implementation, default implementation's dependencies won't appear in
+        # the ${pkgDeps}. However they still need to be present as buildInputs
+        # when calling the `dune`. For this reason a crude trick is used: we include
+        # not only package dependencies of ${pkg}, but also package dependencies of
+        # its dependencies. Because default implementation always lives in the same
+        # package as the virual library and all virual libraries appear in dependencies
+        # of ${pkg}, this is sufficient. This is also "harmless" in sense that this
+        # won't form additional `buildInputs`-driven dependencies beyond which
+        # (transitively) existed already.
+        pkgDepsExtended = builtins.foldl'
+          (acc: depPkg: acc // deps.packageDeps allDeps.units "pkgs" depPkg)
+          pkgDeps (builtins.attrNames pkgDeps);
+        pkgDepsExtendedNames = builtins.attrNames pkgDepsExtended;
+        buildInputPkgNames =
+          builtins.filter (d: !(info.pseudoPackages ? "${d}"))
+          pkgDepsExtendedNames;
+        forbiddenLibs =
+          builtins.foldl' (acc: exe: acc ++ (exe.forbidden_libraries or [ ]))
+          [ ] (builtins.attrValues info.packages."${pkg}".exe);
+        forbiddenLibsByPkg =
+          builtins.removeAttrs (util.organizeLibsByPackage info forbiddenLibs)
+          pkgDepsExtendedNames;
+        forbiddenUnits = util.attrFold (acc: fpkg: libs:
+          acc ++ builtins.map (n: info.packages."${fpkg}".lib."${n}")
+          (builtins.attrNames libs)) [ ] forbiddenLibsByPkg;
+        buildInputs = pkgs.lib.attrVals buildInputPkgNames self.pkgs;
       in pkgs.stdenv.mkDerivation ({
         pname = pkg;
         version = "dev";
@@ -120,7 +159,8 @@ let
           runHook postInstall
         '';
       } // genPatchPhase info self (deps.packageDeps allDeps.units "files" pkg)
-        (deps.packageDepsMulti allDeps.units "exes" pkg) buildInputs);
+        (deps.packageDepsMulti allDeps.units "exes" pkg) buildInputs
+        forbiddenUnits);
 
   genTestedPackage = info: self: pkg: _:
     let
@@ -190,7 +230,7 @@ let
 
         runHook postInstall
       '';
-    } // genPatchPhase info self (deps "files") (deps "exes") [ ]);
+    } // genPatchPhase info self (deps "files") (deps "exes") [ ] [ ]);
 
   duneAndFileDepsFilters = info: src:
     let
@@ -250,10 +290,16 @@ let
   # Only sources, without dependencies built by other derivations
   genPackageSrc = root: allDeps: info: pkg: pkgDef:
     let
-      pseudoPkgDeps = builtins.filter (d: info.pseudoPackages ? "${d}")
-        (builtins.attrNames (deps.packageDeps allDeps.units "pkgs" pkg));
-      sepLibs = builtins.mapAttrs (_: { lib, ... }: builtins.attrNames lib)
-        (pkgs.lib.getAttrs pseudoPkgDeps info.packages);
+      pkgDeps = deps.packageDeps allDeps.units "pkgs" pkg;
+      pseudoPkgDeps = builtins.intersectAttrs
+        (builtins.intersectAttrs pkgDeps info.pseudoPackages) info.packages;
+      # Separated libs defined within units that correspond to no package.
+      # We treat them differently from separated libs of public packages,
+      # allowing them to be substituted during compilation (by providing source
+      # code, at the cost of potentially compiling them more than once).
+      # In general, it's advised to assign a package to most units.
+      sepLibs =
+        builtins.mapAttrs (_: p: builtins.attrNames p.lib) pseudoPkgDeps;
       filters = builtins.concatLists (builtins.concatLists
         (pkgs.lib.mapAttrsToList (_:
           pkgs.lib.mapAttrsToList (_: unitSourceFiltersWithExtra info sepLibs))

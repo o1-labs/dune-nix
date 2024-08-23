@@ -133,8 +133,23 @@ let
       '';
     };
 
+  toPubName = info: d:
+    let d' = info.pubNames."${d}" or "";
+    in if d' == "" then d else d';
+
+  organizeLibsByPackage = info:
+    builtins.foldl' (acc: name:
+      let pname = toPubName info name;
+      in if info.lib2Pkg ? "${pname}" then
+        pkgs.lib.recursiveUpdate acc {
+          "${info.lib2Pkg."${pname}"}"."${pname}" = { };
+        }
+      else
+      # this is a dependency from opam, not to be handled by dune-nix
+        acc) { };
+
 in {
   inherit fixupSymlinksInSource quote skippedTest attrFold attrAll setAttrByPath
     packageHasTestDefs packageHasUnit artifactEnvVar makefileTest
-    squashOpamNixDeps;
+    squashOpamNixDeps toPubName organizeLibsByPackage;
 }

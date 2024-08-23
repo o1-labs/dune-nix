@@ -117,33 +117,10 @@ let
       depMap' = executePromote depMap (trivialPromoted info depMap.libs);
     in util.setAttrByPath depMap' acc2 path;
 
-  toPubName = info: d:
-    let d' = info.pubNames."${d}" or "";
-    in if d' == "" then d else d';
-
-  directLibDeps = info:
+  directLibDeps = info: unit:
     let
-      implementsDep = unit:
-        if unit ? "implements" then
-          [ (toPubName info unit.implements) ]
-        else
-          [ ];
-      mkDep = name: {
-        inherit name;
-        type = "lib";
-        package = info.lib2Pkg."${name}";
-      };
-      libs = builtins.foldl' (acc: name:
-        if info.lib2Pkg ? "${name}" then
-          pkgs.lib.recursiveUpdate acc {
-            "${info.lib2Pkg."${name}"}"."${name}" = { };
-          }
-        else
-          acc);
-    in unit: {
-      libs = libs { }
-        (implementsDep unit ++ builtins.map (toPubName info) unit.deps);
-    };
+      implementsDep = if unit ? "implements" then [ unit.implements ] else [ ];
+    in { libs = util.organizeLibsByPackage info (implementsDep ++ unit.deps); };
 
   computeDeps = info:
     { files, units }@acc:
@@ -189,7 +166,7 @@ let
           let unit = info.packages."${pkg}".lib."${name}";
           in if unit ? "default_implementation" then
             let
-              defImplLib = toPubName info unit.default_implementation;
+              defImplLib = util.toPubName info unit.default_implementation;
               # Check that default implementations do not contain package itself,
               # and there are indeed no implementations for the virtual library
             in if selfImplements != name
@@ -219,7 +196,7 @@ let
         { lib, ... }:
         util.attrFold (acc: name: def:
           if def ? "implements" then
-            let pname = toPubName info def.implements;
+            let pname = util.toPubName info def.implements;
             in pkgs.lib.recursiveUpdate acc {
               "${pname}"."${pkg}"."${name}" = { };
             }
@@ -234,7 +211,7 @@ let
               selfImplements' = if selfImplements == "" then
                 ""
               else
-                toPubName info selfImplements;
+                util.toPubName info selfImplements;
               defImpls =
                 defaultImplementations implementations info selfImplements'
                 deps;

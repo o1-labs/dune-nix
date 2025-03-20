@@ -398,9 +398,7 @@ let
             throw "Executable with name ${name} defined more than once"
           else
             self.all-exes."${package}"."${name}";
-        }) { } (builtins.attrValues info.exes) // {
-          libp2p_helper = pkgs.libp2p_helper;
-        };
+        }) { } (builtins.attrValues info.exes);
       all =
         mkCombined "all" (builtins.map (pkg: self.pkgs."${pkg}") packageNames);
       default = mkCombined "default"

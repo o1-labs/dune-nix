@@ -148,8 +148,31 @@ let
       # this is a dependency from opam, not to be handled by dune-nix
         acc) { };
 
+  remove-ocaml-references = compiler:
+    pkgs.stdenv.mkDerivation {
+      name = "remove-ocaml-references-dev";
+      phases = [ "installPhase" ];
+      nativeBuildInputs = [ compiler ];
+      installPhase = ''
+        mkdir -p $out/bin
+        echo "#!${pkgs.runtimeShell}" > $out/bin/remove-ocaml-references
+        echo "OCAML_BASE_COMPILE_PATH=$(dirname $(dirname $(command -v ocaml)))" >> $out/bin/remove-ocaml-references
+        echo '${pkgs.removeReferencesTo}/bin/remove-references-to -t $OCAML_BASE_COMPILE_PATH "$@"' >> $out/bin/remove-ocaml-references
+        chmod +x $out/bin/remove-ocaml-references
+      '';
+    };
+  removeOcamlRefsFromExesOverlay = self: super: {
+    exes = builtins.mapAttrs (_: value:
+      value.overrideAttrs (oa: {
+        nativeBuildInputs = oa.nativeBuildInputs
+          ++ [ (remove-ocaml-references self.ocaml-base-compiler) ];
+        postInstall = "remove-ocaml-references $out/bin/*";
+      })) super.exes;
+  };
+
 in {
   inherit fixupSymlinksInSource quote skippedTest attrFold attrAll setAttrByPath
     packageHasTestDefs packageHasUnit artifactEnvVar makefileTest
-    squashOpamNixDeps toPubName organizeLibsByPackage;
+    squashOpamNixDeps toPubName organizeLibsByPackage
+    removeOcamlRefsFromExesOverlay remove-ocaml-references;
 }

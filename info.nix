@@ -45,6 +45,12 @@ let
     { packages, lib2Pkg, pubNames, exes, pseudoPackages, ... }@acc:
     unit:
     let
+      privateName = if unit ? "name" then
+        unit.name
+      else if unit ? "public_name" then
+        unit.public_name
+      else
+        builtins.throw "unit with neither name nor public_name defined";
       pkg = if unit ? "package" then
         unit.package
       else if unit ? "public_name" && unit.type == "lib" then
@@ -53,8 +59,11 @@ let
         "__${util.quote src}__";
       isPseudoPkg = !(unit ? "package")
         && !(unit ? "public_name" && unit.type == "lib");
-      name = if unit ? "public_name" then unit.public_name else unit.name;
-      unitInfo = unit // { inherit src; };
+      name = if unit ? "public_name" then unit.public_name else privateName;
+      unitInfo = unit // {
+        inherit src;
+        name = privateName;
+      };
       packages' = if packages ? "${pkg}" then
         packages // {
           "${pkg}" = packages."${pkg}" // {
@@ -75,11 +84,11 @@ let
       lib2Pkg' =
         if unit.type == "lib" then extendAcc pkg name pkg lib2Pkg else lib2Pkg;
       pubNames' = if unit.type == "lib" && unit ? "public_name" then
-        extendAccDef "" unit.name unit.public_name pubNames
+        extendAccDef "" privateName unit.public_name pubNames
       else
         pubNames;
       exes' = if unit.type == "exe" then
-        extendAcc pkg "${src}/${unit.name}.exe" {
+        extendAcc pkg "${src}/${privateName}.exe" {
           package = pkg;
           inherit name;
         } exes

@@ -114,11 +114,20 @@ let
       filter = ps: t:
         # Strip derivation prefix (if present) and split path string to list of components
         let
-          ps' = if pkgs.lib.hasPrefix "${builtins.storeDir}/" ps then
-            pkgs.lib.tail (pkgs.lib.splitString "/"
-              (pkgs.lib.removePrefix "${builtins.storeDir}/" ps))
-          else
-            pkgs.lib.splitString "/" ps;
+          splitComponents = pkgs.lib.splitString "/"
+              (if pkgs.lib.hasPrefix "${builtins.storeDir}/" ps
+                then pkgs.lib.removePrefix "${builtins.storeDir}/" ps
+                else ps) ;
+          firstComponent = builtins.head splitComponents;
+          pathToRootLength = 1 + builtins.length (
+            pkgs.lib.splitString "/"
+            (builtins.head (builtins.match ".*/store/[^/]+-source/?(.*)"
+            (toString pathParams.path))));
+          ps' = if
+            (builtins.match "^[0-9a-df-np-sv-z]{32}(-.*)?$" firstComponent != null) &&
+            (!pkgs.lib.hasSuffix "-source" firstComponent)
+              then pkgs.lib.tail splitComponents
+              else pkgs.lib.drop pathToRootLength splitComponents;
         in pkgs.lib.hasAttrByPath ps' filterMap
         || checkAncestors t ps' filterMap;
     });

@@ -124,7 +124,7 @@ let
             (builtins.head (builtins.match ".*/store/[^/]+-source/?(.*)"
             (toString pathParams.path))));
           ps' = if
-            (builtins.match "^[0-9a-df-np-sv-z]{32}(-.*)?$" firstComponent != null) &&
+            (builtins.match "^[0-9a-z]{32}(-.*)?$" firstComponent != null) &&
             (!pkgs.lib.hasSuffix "-source" firstComponent)
               then pkgs.lib.tail splitComponents
               else pkgs.lib.drop pathToRootLength splitComponents;

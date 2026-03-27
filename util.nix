@@ -102,23 +102,21 @@ let
 
   squashOpamNixDeps = ocamlVersion: buildInputs:
     pkgs.stdenv.mkDerivation {
-      name = "squashed-ocaml-dependencies";
       phases = [ "installPhase" ];
       inherit buildInputs;
       installPhase = ''
         mkdir -p $out/lib/ocaml/${ocamlVersion}/site-lib/stublibs $out/nix-support $out/bin
         {
-          echo -n 'export OCAMLPATH=$'
-          echo -n '{OCAMLPATH-}$'
+          echo -n 'export OCAMLPATH=''$'
+          echo -n '{OCAMLPATH-}''$'
           echo '{OCAMLPATH:+:}'"$out/lib/ocaml/${ocamlVersion}/site-lib"
-          echo -n 'export CAML_LD_LIBRARY_PATH=$'
-          echo -n '{CAML_LD_LIBRARY_PATH-}$'
+          echo -n 'export CAML_LD_LIBRARY_PATH=''$'
+          echo -n '{CAML_LD_LIBRARY_PATH-}''$'
           echo '{CAML_LD_LIBRARY_PATH:+:}'"$out/lib/ocaml/${ocamlVersion}/site-lib/stublibs"
         } > $out/nix-support/setup-hook
         for input in $buildInputs; do
           [ ! -d "$input/lib/ocaml/${ocamlVersion}/site-lib" ] || {
             find "$input/lib/ocaml/${ocamlVersion}/site-lib" -maxdepth 1 -mindepth 1 -not -name stublibs | while read d; do
-              ln -s "$d" "$out/lib/ocaml/${ocamlVersion}/site-lib/"
             done
           }
           [ ! -d "$input/lib/ocaml/${ocamlVersion}/site-lib/stublibs" ] || cp -Rs "$input/lib/ocaml/${ocamlVersion}/site-lib/stublibs"/* "$out/lib/ocaml/${ocamlVersion}/site-lib/stublibs/"
